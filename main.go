@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
@@ -170,11 +171,23 @@ func main() {
 	middleware.SetUpLogger(server)
 	// Initialize session store
 	store := cookie.NewStore([]byte(common.SessionSecret))
+	// Cookie Secure 自适应:
+	//   - 默认根据 ServerAddress 是否 https:// 判断
+	//   - SESSION_COOKIE_SECURE=true/false 可强制覆盖
+	cookieSecure := strings.HasPrefix(strings.ToLower(strings.TrimSpace(system_setting.ServerAddress)), "https://")
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("SESSION_COOKIE_SECURE"))); v != "" {
+		switch v {
+		case "1", "true", "yes", "on":
+			cookieSecure = true
+		case "0", "false", "no", "off":
+			cookieSecure = false
+		}
+	}
 	store.Options(sessions.Options{
 		Path:     "/",
 		MaxAge:   2592000, // 30 days
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   cookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
 	server.Use(sessions.Sessions("session", store))

@@ -34,16 +34,15 @@ func generateCreemSignature(payload string, secret string) string {
 }
 
 // 验证Creem webhook签名
+//
+// 必须有 webhook secret 才能验签;test mode 也不再放行空 secret(以前的
+// "secret 为空且 test_mode=true 直接返回 true" 分支已移除,以避免回归触发)。
+// 外层 isCreemWebhookEnabled() 已经在 secret 为空时拒收 webhook,这里再做一道。
 func verifyCreemSignature(payload string, signature string, secret string) bool {
 	if secret == "" {
-		logger.LogWarn(context.Background(), fmt.Sprintf("Creem webhook secret 未配置 test_mode=%t signature=%q body=%q", setting.CreemTestMode, signature, payload))
-		if setting.CreemTestMode {
-			logger.LogInfo(context.Background(), fmt.Sprintf("Creem webhook 验签已跳过 reason=test_mode signature=%q body=%q", signature, payload))
-			return true
-		}
+		logger.LogWarn(context.Background(), fmt.Sprintf("Creem webhook secret 未配置,验签失败 signature=%q", signature))
 		return false
 	}
-
 	expectedSignature := generateCreemSignature(payload, secret)
 	return hmac.Equal([]byte(signature), []byte(expectedSignature))
 }
