@@ -86,6 +86,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		UserId:          userId,
 		PlanId:          plan.Id,
 		Money:           plan.PriceAmount,
+		Currency:        plan.Currency,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodCreem,
 		PaymentProvider: model.PaymentProviderCreem,

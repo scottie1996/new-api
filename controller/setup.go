@@ -61,6 +61,25 @@ func PostSetup(c *gin.Context) {
 		return
 	}
 
+	// 必须携带 X-Setup-Token 才能进入 /api/setup,token 由进程启动时生成并写到日志/文件,
+	// 阻止匿名访客在初始化窗口期抢占 root。
+	suppliedToken := c.GetHeader("X-Setup-Token")
+	if !common.SetupTokenActive() {
+		// 启动期未生成 token (例如已经初始化完成、或 token 已被消费),拒绝
+		c.JSON(401, gin.H{
+			"success": false,
+			"message": "setup token 未启用或已失效",
+		})
+		return
+	}
+	if !common.VerifySetupToken(suppliedToken) {
+		c.JSON(401, gin.H{
+			"success": false,
+			"message": "setup token 校验失败",
+		})
+		return
+	}
+
 	// Check if root user already exists
 	rootExists := model.RootUserExists()
 
@@ -167,6 +186,9 @@ func PostSetup(c *gin.Context) {
 		})
 		return
 	}
+
+	// Setup 成功,token 立即作废,后续任何 /api/setup 请求都会被 SetupTokenActive() 拦截。
+	common.ClearSetupToken()
 
 	c.JSON(200, gin.H{
 		"success": true,

@@ -207,10 +207,9 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	}
 }
 
-// TokenAuthReadOnly 宽松版本的令牌认证中间件，用于只读查询接口。
-// 只验证令牌 key 是否存在，不检查令牌状态、过期时间和额度。
-// 即使令牌已过期、已耗尽或已禁用，也允许访问。
-// 仍然检查用户是否被封禁。
+// TokenAuthReadOnly 用于只读查询接口的令牌认证。
+// 与 TokenAuth 共享 ValidateUserToken 路径，会同时检查令牌的状态、过期时间和余额，
+// 防止已禁用、过期或耗尽的令牌继续读取使用量与日志。
 func TokenAuthReadOnly() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		key := c.Request.Header.Get("Authorization")
@@ -229,7 +228,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		parts := strings.Split(key, "-")
 		key = parts[0]
 
-		token, err := model.GetTokenByKey(key, false)
+		token, err := model.ValidateUserToken(key)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				c.JSON(http.StatusUnauthorized, gin.H{
@@ -237,10 +236,9 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 					"message": common.TranslateMessage(c, i18n.MsgTokenInvalid),
 				})
 			} else {
-				common.SysLog("TokenAuthReadOnly GetTokenByKey database error: " + err.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{
+				c.JSON(http.StatusUnauthorized, gin.H{
 					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+					"message": err.Error(),
 				})
 			}
 			c.Abort()

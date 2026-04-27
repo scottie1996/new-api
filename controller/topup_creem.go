@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -109,6 +110,7 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 		UserId:          id,
 		Amount:          selectedProduct.Quota, // 充值额度
 		Money:           selectedProduct.Price, // 支付金额
+		Currency:        strings.ToUpper(selectedProduct.Currency),
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodCreem,
 		PaymentProvider: model.PaymentProviderCreem,
@@ -299,10 +301,16 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		return
 	}
 
+	// Creem amount_paid 是最小单位整数 (USD/EUR cents, JPY/KRW 整数)
+	paid := model.PaidAmountInput{
+		AmountMinorUnit: int64(event.Object.Order.AmountPaid),
+		Currency:        strings.ToUpper(event.Object.Order.Currency),
+	}
+
 	// Try complete subscription order first
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
-	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, ""); err == nil {
+	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, "", paid); err == nil {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 订阅订单处理成功 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 		c.Status(http.StatusOK)
 		return
@@ -347,7 +355,7 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Creem 回调客户姓名为空 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 	}
 
-	err := model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP())
+	err := model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP(), paid)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 充值处理失败 trade_no=%s creem_order_id=%s client_ip=%s error=%q", referenceId, event.Object.Order.Id, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusInternalServerError)

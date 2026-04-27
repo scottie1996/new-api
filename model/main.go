@@ -107,12 +107,34 @@ func CheckSetup() {
 		} else {
 			common.SysLog("system is not initialized and no root user exists")
 			constant.Setup = false
+			armSetupToken()
 		}
 	} else {
 		// Setup record exists, system is initialized
 		common.SysLog("system is already initialized at: " + time.Unix(setup.InitializedAt, 0).String())
 		constant.Setup = true
 	}
+}
+
+// armSetupToken generates a one-shot setup token used to authorize the
+// initial /api/setup call. Without it, anyone reaching the endpoint during
+// the uninitialized window can claim root.
+//
+// The token is logged once with high visibility so the operator can copy it.
+// It is also written to a 0600 file (default ./setup_token, override with
+// SETUP_TOKEN_FILE env). The token is cleared after PostSetup succeeds and
+// becomes inert for the remainder of the process lifetime.
+func armSetupToken() {
+	token, err := common.EnsureSetupToken()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to persist setup token to file (in-memory token still active): %v", err))
+	}
+	common.SysLog("============================================================")
+	common.SysLog("FIRST-RUN SETUP TOKEN — required for POST /api/setup:")
+	common.SysLog("X-Setup-Token: " + token)
+	common.SysLog("file: " + common.SetupTokenFilePath())
+	common.SysLog("Token is single-use; it self-destructs once setup succeeds.")
+	common.SysLog("============================================================")
 }
 
 func chooseDB(envName string, isLog bool) (*gorm.DB, error) {

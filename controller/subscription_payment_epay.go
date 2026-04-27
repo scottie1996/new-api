@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +17,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
+
+// buildEpayPaidInput converts an Epay verifyInfo into a normalized PaidAmountInput.
+// Epay always reports amounts as a string in major units (e.g. "9.99") and does
+// not include currency, so we treat the deployment-configured EpayCurrency as
+// canonical and reject the callback if its money field cannot be parsed.
+func buildEpayPaidInput(verifyInfo *epay.VerifyRes) (model.PaidAmountInput, error) {
+	paidYuan, err := strconv.ParseFloat(verifyInfo.Money, 64)
+	if err != nil {
+		return model.PaidAmountInput{}, fmt.Errorf("epay verifyInfo.Money parse failed: %w", err)
+	}
+	return model.PaidAmountInput{
+		AmountMinorUnit: int64(math.Round(paidYuan * 100)),
+		Currency:        operation_setting.EpayCurrency,
+	}, nil
+}
 
 type SubscriptionEpayPayRequest struct {
 	PlanId        int    `json:"plan_id"`
@@ -85,6 +101,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		UserId:          userId,
 		PlanId:          plan.Id,
 		Money:           plan.PriceAmount,
+		Currency:        plan.Currency,
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,
 		PaymentProvider: model.PaymentProviderEpay,
@@ -157,7 +174,12 @@ func SubscriptionEpayNotify(c *gin.Context) {
 	LockOrder(verifyInfo.ServiceTradeNo)
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
 
-	if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type); err != nil {
+	paid, paidErr := buildEpayPaidInput(verifyInfo)
+	if paidErr != nil {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type, paid); err != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -206,7 +228,12 @@ func SubscriptionEpayReturn(c *gin.Context) {
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
 		LockOrder(verifyInfo.ServiceTradeNo)
 		defer UnlockOrder(verifyInfo.ServiceTradeNo)
-		if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type); err != nil {
+		paid, paidErr := buildEpayPaidInput(verifyInfo)
+		if paidErr != nil {
+			c.Redirect(http.StatusFound, system_setting.ServerAddress+"/console/topup?pay=fail")
+			return
+		}
+		if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type, paid); err != nil {
 			c.Redirect(http.StatusFound, system_setting.ServerAddress+"/console/topup?pay=fail")
 			return
 		}

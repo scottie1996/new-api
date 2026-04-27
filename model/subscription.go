@@ -198,6 +198,8 @@ type SubscriptionOrder struct {
 	PlanId int     `json:"plan_id" gorm:"index"`
 	Money  float64 `json:"money"`
 
+	Currency string `json:"currency" gorm:"type:varchar(8);default:''"`
+
 	TradeNo         string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50)"`
 	PaymentProvider string `json:"payment_provider" gorm:"type:varchar(50);default:''"`
@@ -508,7 +510,9 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
 // expectedPaymentProvider guards against cross-gateway callback attacks (empty skips the check).
 // actualPaymentMethod updates the order's PaymentMethod to reflect the real payment type used (empty skips update).
-func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedPaymentProvider string, actualPaymentMethod string) error {
+// paid carries the webhook-reported amount/currency; the order is rejected (status=underpaid) if the
+// reported amount is below plan.PriceAmount or currencies disagree.
+func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedPaymentProvider string, actualPaymentMethod string, paid PaidAmountInput) error {
 	if tradeNo == "" {
 		return errors.New("tradeNo is empty")
 	}
@@ -542,6 +546,17 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if !plan.Enabled {
 			// still allow completion for already purchased orders
 		}
+
+		if verr := order.VerifyPaidAmountWithPlan(plan, paid); verr != nil {
+			order.Status = common.TopUpStatusUnderpaid
+			order.CompleteTime = common.GetTimestamp()
+			if providerPayload != "" {
+				order.ProviderPayload = providerPayload
+			}
+			_ = tx.Save(&order).Error
+			return verr
+		}
+
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
 		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
 		if err != nil {

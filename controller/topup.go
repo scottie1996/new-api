@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -240,6 +241,7 @@ func RequestEpay(c *gin.Context) {
 		UserId:          id,
 		Amount:          amount,
 		Money:           payMoney,
+		Currency:        operation_setting.EpayCurrency,
 		TradeNo:         tradeNo,
 		PaymentMethod:   req.PaymentMethod,
 		PaymentProvider: model.PaymentProviderEpay,
@@ -374,6 +376,28 @@ func EpayNotify(c *gin.Context) {
 			return
 		}
 		if topUp.Status == common.TopUpStatusPending {
+			paidYuan, parseErr := strconv.ParseFloat(verifyInfo.Money, 64)
+			if parseErr != nil {
+				logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 回调金额解析失败 trade_no=%s money=%q client_ip=%s error=%q", verifyInfo.ServiceTradeNo, verifyInfo.Money, c.ClientIP(), parseErr.Error()))
+				return
+			}
+			paidCurrency := topUp.Currency
+			if paidCurrency == "" {
+				paidCurrency = operation_setting.EpayCurrency
+			}
+			paid := model.PaidAmountInput{
+				AmountMinorUnit: int64(math.Round(paidYuan * 100)),
+				Currency:        paidCurrency,
+			}
+			if verr := topUp.VerifyPaidAmount(paid); verr != nil {
+				logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 回调金额校验失败 trade_no=%s order_money=%.2f paid_money=%.2f currency=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, topUp.Money, paidYuan, paidCurrency, c.ClientIP(), verr.Error()))
+				topUp.Status = common.TopUpStatusUnderpaid
+				topUp.CompleteTime = common.GetTimestamp()
+				if updateErr := topUp.Update(); updateErr != nil {
+					logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 标记 underpaid 状态失败 trade_no=%s error=%q", topUp.TradeNo, updateErr.Error()))
+				}
+				return
+			}
 			if topUp.PaymentMethod != verifyInfo.Type {
 				logger.LogInfo(c.Request.Context(), fmt.Sprintf("易支付 实际支付方式与订单不同 trade_no=%s order_payment_method=%s actual_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, topUp.PaymentMethod, verifyInfo.Type, c.ClientIP()))
 				topUp.PaymentMethod = verifyInfo.Type
@@ -384,8 +408,6 @@ func EpayNotify(c *gin.Context) {
 				logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 更新充值订单失败 trade_no=%s user_id=%d client_ip=%s error=%q topup=%q", topUp.TradeNo, topUp.UserId, c.ClientIP(), err.Error(), common.GetJsonString(topUp)))
 				return
 			}
-			//user, _ := model.GetUserById(topUp.UserId, false)
-			//user.Quota += topUp.Amount * 500000
 			dAmount := decimal.NewFromInt(int64(topUp.Amount))
 			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 			quotaToAdd := int(dAmount.Mul(dQuotaPerUnit).IntPart())

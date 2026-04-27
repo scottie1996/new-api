@@ -104,6 +104,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		UserId:          id,
 		Amount:          req.Amount,
 		Money:           chargedMoney,
+		Currency:        setting.StripeCurrency,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
 		PaymentProvider: model.PaymentProviderStripe,
@@ -265,13 +266,20 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+	amountTotalRaw := event.GetObjectValue("amount_total")
+	amountTotalMinor, _ := strconv.ParseInt(amountTotalRaw, 10, 64)
+	currency := strings.ToUpper(event.GetObjectValue("currency"))
+	paid := model.PaidAmountInput{
+		AmountMinorUnit: amountTotalMinor,
+		Currency:        currency,
+	}
 	payload := map[string]any{
 		"customer":     customerId,
-		"amount_total": event.GetObjectValue("amount_total"),
-		"currency":     strings.ToUpper(event.GetObjectValue("currency")),
+		"amount_total": amountTotalRaw,
+		"currency":     currency,
 		"event_type":   string(event.Type),
 	}
-	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
+	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, "", paid); err == nil {
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单处理成功 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))
 		return
 	} else if err != nil && !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
@@ -279,15 +287,13 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		return
 	}
 
-	err := model.Recharge(referenceId, customerId, callerIp)
+	err := model.Recharge(referenceId, customerId, callerIp, paid)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Stripe 充值处理失败 trade_no=%s event_type=%s client_ip=%s error=%q", referenceId, string(event.Type), callerIp, err.Error()))
 		return
 	}
 
-	total, _ := strconv.ParseFloat(event.GetObjectValue("amount_total"), 64)
-	currency := strings.ToUpper(event.GetObjectValue("currency"))
-	logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值成功 trade_no=%s amount_total=%.2f currency=%s event_type=%s client_ip=%s", referenceId, total/100, currency, string(event.Type), callerIp))
+	logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值成功 trade_no=%s amount_total=%.2f currency=%s event_type=%s client_ip=%s", referenceId, float64(amountTotalMinor)/100, currency, string(event.Type), callerIp))
 }
 
 func sessionExpired(ctx context.Context, event stripe.Event) {

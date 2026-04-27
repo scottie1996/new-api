@@ -16,6 +16,7 @@ type TopUp struct {
 	UserId          int     `json:"user_id" gorm:"index"`
 	Amount          int64   `json:"amount"`
 	Money           float64 `json:"money"`
+	Currency        string  `json:"currency" gorm:"type:varchar(8);default:''"`
 	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
 	PaymentProvider string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
@@ -104,7 +105,7 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 	})
 }
 
-func Recharge(referenceId string, customerId string, callerIp string) (err error) {
+func Recharge(referenceId string, customerId string, callerIp string, paid PaidAmountInput) (err error) {
 	if referenceId == "" {
 		return errors.New("未提供支付单号")
 	}
@@ -131,6 +132,13 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return errors.New("充值订单状态错误")
 		}
 
+		if verr := topUp.VerifyPaidAmount(paid); verr != nil {
+			topUp.Status = common.TopUpStatusUnderpaid
+			topUp.CompleteTime = common.GetTimestamp()
+			_ = tx.Save(topUp).Error
+			return verr
+		}
+
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		err = tx.Save(topUp).Error
@@ -149,6 +157,9 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 
 	if err != nil {
 		common.SysError("topup failed: " + err.Error())
+		if errors.Is(err, ErrPaymentUnderpayment) || errors.Is(err, ErrPaymentCurrencyMismatch) || errors.Is(err, ErrPaymentAmountMissing) {
+			return err
+		}
 		return errors.New("充值失败，请稍后重试")
 	}
 
@@ -387,7 +398,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	RecordTopupLog(userId, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), callerIp, paymentMethod, "admin")
 	return nil
 }
-func RechargeCreem(referenceId string, customerEmail string, customerName string, callerIp string) (err error) {
+func RechargeCreem(referenceId string, customerEmail string, customerName string, callerIp string, paid PaidAmountInput) (err error) {
 	if referenceId == "" {
 		return errors.New("未提供支付单号")
 	}
@@ -414,6 +425,13 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			return errors.New("充值订单状态错误")
 		}
 
+		if verr := topUp.VerifyPaidAmount(paid); verr != nil {
+			topUp.Status = common.TopUpStatusUnderpaid
+			topUp.CompleteTime = common.GetTimestamp()
+			_ = tx.Save(topUp).Error
+			return verr
+		}
+
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		err = tx.Save(topUp).Error
@@ -424,24 +442,8 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		// Creem 直接使用 Amount 作为充值额度（整数）
 		quota = topUp.Amount
 
-		// 构建更新字段，优先使用邮箱，如果邮箱为空则使用用户名
 		updateFields := map[string]interface{}{
 			"quota": gorm.Expr("quota + ?", quota),
-		}
-
-		// 如果有客户邮箱，尝试更新用户邮箱（仅当用户邮箱为空时）
-		if customerEmail != "" {
-			// 先检查用户当前邮箱是否为空
-			var user User
-			err = tx.Where("id = ?", topUp.UserId).First(&user).Error
-			if err != nil {
-				return err
-			}
-
-			// 如果用户邮箱为空，则更新为支付时使用的邮箱
-			if user.Email == "" {
-				updateFields["email"] = customerEmail
-			}
 		}
 
 		err = tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(updateFields).Error
@@ -454,6 +456,9 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 
 	if err != nil {
 		common.SysError("creem topup failed: " + err.Error())
+		if errors.Is(err, ErrPaymentUnderpayment) || errors.Is(err, ErrPaymentCurrencyMismatch) || errors.Is(err, ErrPaymentAmountMissing) {
+			return err
+		}
 		return errors.New("充值失败，请稍后重试")
 	}
 
