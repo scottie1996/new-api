@@ -58,7 +58,7 @@ func SendEmail(subject string, receiver string, content string) error {
 	var err error
 	if SMTPPort == 465 || SMTPSSLEnabled {
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: SMTPSkipTLSVerify,
 			ServerName:         SMTPServer,
 		}
 		conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", SMTPServer, SMTPPort), tlsConfig)

@@ -81,6 +81,11 @@ var SMTPServer = ""
 var SMTPPort = 587
 var SMTPSSLEnabled = false
 var SMTPForceAuthLogin = false
+// SMTPSkipTLSVerify, when true, disables certificate verification on the
+// SMTPS (port 465 / SSL) path. Default false. Operators with self-signed
+// internal SMTP relays may opt in via the admin SMTP settings UI; in
+// production the issuer chain should be trusted instead.
+var SMTPSkipTLSVerify = false
 var SMTPAccount = ""
 var SMTPFrom = ""
 var SMTPToken = ""
