@@ -25,7 +25,9 @@ docker build -t new-api:security-fixes .
 
 ### 1.2 低内存构建(Docker Desktop 用此路径)
 
-容器内的 Vite production 构建在 8 GB Docker VM 上会被 OOM kill。绕过办法:在宿主机用 bun 先把前端构建好,再用 `Dockerfile.prebuilt` 只跑 Go 阶段。
+容器内的 Vite production 构建在 8 GB Docker VM 上会被 OOM kill。绕过办法:在宿主机用 bun 先把两个前端构建好,再用 `Dockerfile.prebuilt` 只跑 Go 阶段。
+
+> 自 upstream v1.0 起,前端拆成两个:`web/default`(React 19 + Rsbuild + Radix UI,默认主题)与 `web/classic`(React 18 + Vite + Semi UI,经典主题)。后端通过 `//go:embed` 同时嵌入两份产物,运行时按主题切换 — 都必须存在,否则 `go build` 会报 `pattern web/.../dist: no matching files found`。
 
 ```bash
 # 准备宿主机 bun(macOS / Linux)
@@ -34,12 +36,20 @@ export PATH="$HOME/.bun/bin:$PATH"
 
 # 在仓库根目录
 cd new-api
-cd web
-bun install --frozen-lockfile
-DISABLE_ESLINT_PLUGIN=true VITE_REACT_APP_VERSION=$(cat ../VERSION) bun run build
-cd ..
 
-# 用 Go-only Dockerfile 构建
+# 1) 构建 classic(Vite,内存峰值约 4-6 GB)
+cd web/classic
+bun install --frozen-lockfile
+DISABLE_ESLINT_PLUGIN=true VITE_REACT_APP_VERSION=$(cat ../../VERSION) bun run build
+cd ../..
+
+# 2) 构建 default(Rsbuild,内存峰值约 3-5 GB)
+cd web/default
+bun install --frozen-lockfile
+bun run build
+cd ../..
+
+# 3) 用 Go-only Dockerfile 构建后端(此时 web/{default,classic}/dist 都已就绪)
 DOCKER_BUILDKIT=0 docker build -f Dockerfile.prebuilt -t new-api:security-fixes .
 ```
 
