@@ -467,7 +467,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 	return nil
 }
 
-func RechargeWaffo(tradeNo string, callerIp string) (err error) {
+func RechargeWaffo(tradeNo string, callerIp string, paid PaidAmountInput) (err error) {
 	if tradeNo == "" {
 		return errors.New("未提供支付单号")
 	}
@@ -498,6 +498,13 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 			return errors.New("充值订单状态错误")
 		}
 
+		if verr := topUp.VerifyPaidAmount(paid); verr != nil {
+			topUp.Status = common.TopUpStatusUnderpaid
+			topUp.CompleteTime = common.GetTimestamp()
+			_ = tx.Save(topUp).Error
+			return verr
+		}
+
 		dAmount := decimal.NewFromInt(topUp.Amount)
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 		quotaToAdd = int(dAmount.Mul(dQuotaPerUnit).IntPart())
@@ -520,6 +527,9 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 
 	if err != nil {
 		common.SysError("waffo topup failed: " + err.Error())
+		if errors.Is(err, ErrPaymentUnderpayment) || errors.Is(err, ErrPaymentCurrencyMismatch) || errors.Is(err, ErrPaymentAmountMissing) {
+			return err
+		}
 		return errors.New("充值失败，请稍后重试")
 	}
 

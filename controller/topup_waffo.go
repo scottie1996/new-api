@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -211,6 +213,7 @@ func RequestWaffoPay(c *gin.Context) {
 		UserId:          id,
 		Amount:          amount,
 		Money:           payMoney,
+		Currency:        getWaffoCurrency(),
 		TradeNo:         merchantOrderId,
 		PaymentMethod:   model.PaymentMethodWaffo,
 		PaymentProvider: model.PaymentProviderWaffo,
@@ -395,7 +398,26 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 	LockOrder(merchantOrderId)
 	defer UnlockOrder(merchantOrderId)
 
-	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP()); err != nil {
+	// Waffo OrderAmount/OrderCurrency 是 Waffo 回显的下单金额（主单位字符串）。
+	// 拒绝币种不一致或少付——攻击场景:回调被构造或重放成低额订单,
+	// 即便 OrderStatus=PAY_SUCCESS 也不应按本地 topUp.Amount 直接发货。
+	paidAmountFloat, parseErr := strconv.ParseFloat(result.OrderAmount, 64)
+	if parseErr != nil {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 回调金额解析失败 trade_no=%s order_amount=%q client_ip=%s error=%q", merchantOrderId, result.OrderAmount, c.ClientIP(), parseErr.Error()))
+		sendWaffoWebhookResponse(c, wh, false, "invalid order amount")
+		return
+	}
+	currency := strings.ToUpper(strings.TrimSpace(result.OrderCurrency))
+	factor := int64(100)
+	if zeroDecimalCurrencies[currency] {
+		factor = 1
+	}
+	paid := model.PaidAmountInput{
+		AmountMinorUnit: int64(math.Round(paidAmountFloat * float64(factor))),
+		Currency:        currency,
+	}
+
+	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP(), paid); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 充值处理失败 trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return
