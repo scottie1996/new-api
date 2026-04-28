@@ -35,11 +35,17 @@ import (
 	_ "net/http/pprof"
 )
 
-//go:embed web/dist
+//go:embed web/default/dist
 var buildFS embed.FS
 
-//go:embed web/dist/index.html
+//go:embed web/default/dist/index.html
 var indexPage []byte
+
+//go:embed web/classic/dist
+var classicBuildFS embed.FS
+
+//go:embed web/classic/dist/index.html
+var classicIndexPage []byte
 
 func main() {
 	startTime := time.Now()
@@ -196,7 +202,12 @@ func main() {
 	InjectGoogleAnalytics()
 
 	// 设置路由
-	router.SetRouter(server, buildFS, indexPage)
+	router.SetRouter(server, router.ThemeAssets{
+		DefaultBuildFS:   buildFS,
+		DefaultIndexPage: indexPage,
+		ClassicBuildFS:   classicBuildFS,
+		ClassicIndexPage: classicIndexPage,
+	})
 	var port = os.Getenv("PORT")
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
@@ -226,8 +237,10 @@ func InjectUmamiAnalytics() {
 		analyticsInjectBuilder.WriteString("\"></script>")
 	}
 	analyticsInjectBuilder.WriteString("<!--Umami QuantumNous-->\n")
-	analyticsInject := analyticsInjectBuilder.String()
-	indexPage = bytes.ReplaceAll(indexPage, []byte("<!--umami-->\n"), []byte(analyticsInject))
+	analyticsInject := []byte(analyticsInjectBuilder.String())
+	placeholder := []byte("<!--umami-->\n")
+	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
+	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
 func InjectGoogleAnalytics() {
@@ -248,8 +261,10 @@ func InjectGoogleAnalytics() {
 		analyticsInjectBuilder.WriteString("</script>")
 	}
 	analyticsInjectBuilder.WriteString("<!--Google Analytics QuantumNous-->\n")
-	analyticsInject := analyticsInjectBuilder.String()
-	indexPage = bytes.ReplaceAll(indexPage, []byte("<!--Google Analytics-->\n"), []byte(analyticsInject))
+	analyticsInject := []byte(analyticsInjectBuilder.String())
+	placeholder := []byte("<!--Google Analytics-->\n")
+	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
+	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
 func InitResources() error {
